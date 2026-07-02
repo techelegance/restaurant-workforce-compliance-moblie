@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
+import { useMockAttendance } from '@/lib/mock-attendance';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,10 +122,9 @@ const MOCK: ShiftSummaryParams = {
 // ---------------------------------------------------------------------------
 export default function ShiftSummaryScreen() {
   const router = useRouter();
+  const attendance = useMockAttendance();
 
-  // In real usage: const params = useLocalSearchParams<ShiftSummaryParams>();
-  // Using mock for now:
-  const params = MOCK;
+  const params = attendance.lastShift ?? MOCK;
 
   const clockIn = useMemo(() => parseTime(params.clockInTime), [params.clockInTime]);
   const clockOut = useMemo(() => parseTime(params.clockOutTime), [params.clockOutTime]);

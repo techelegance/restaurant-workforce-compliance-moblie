@@ -1,39 +1,24 @@
 import React, { useState, useMemo } from 'react';
 import {
+  Alert,
+  Modal,
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-type ComplianceStatus = 'compliant' | 'missing_break' | 'overtime' | 'day_off';
-
-interface DayRecord {
-  date: string;        // 'YYYY-MM-DD'
-  dayLabel: string;    // 'Mon', 'Tue', ...
-  clockIn: string;     // 'HH:MM AM'
-  clockOut: string;    // 'HH:MM PM'
-  workedSeconds: number;
-  breakSeconds: number;
-  overtimeSeconds: number;
-  status: ComplianceStatus;
-}
-
-interface WeekSummary {
-  label: string;       // 'This Week' | 'Last Week' | ...
-  startDate: string;
-  endDate: string;
-  totalWorked: number; // seconds
-  totalOvertime: number;
-  days: DayRecord[];
-}
+import { Ionicons } from '@expo/vector-icons';
+import {
+  buildWeeks,
+  ComplianceStatus,
+  DayRecord,
+  HoursFormErrors,
+  HoursFormValues,
+  useHoursStore,
+} from '@/lib/hours-store';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -57,92 +42,7 @@ const BRAND = {
   blue: '#1D4ED8',
 };
 
-const OVERTIME_THRESHOLD = 28800; // 8h in seconds
 const WEEK_LIMIT = 144000;        // 40h in seconds
-
-// ---------------------------------------------------------------------------
-// Mock data — replace with API call
-// ---------------------------------------------------------------------------
-function makeMockWeeks(): WeekSummary[] {
-  const now = new Date();
-  const weeks: WeekSummary[] = [];
-
-  for (let w = 0; w < 3; w++) {
-    const days: DayRecord[] = [];
-    let totalWorked = 0;
-    let totalOvertime = 0;
-
-    for (let d = 0; d < 7; d++) {
-      const date = new Date(now);
-      date.setDate(now.getDate() - now.getDay() - w * 7 + d);
-      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-      // Weekends off
-      if (d === 0 || d === 6) {
-        days.push({
-          date: date.toISOString().slice(0, 10),
-          dayLabel: dayNames[d],
-          clockIn: '-',
-          clockOut: '-',
-          workedSeconds: 0,
-          breakSeconds: 0,
-          overtimeSeconds: 0,
-          status: 'day_off',
-        });
-        continue;
-      }
-
-      // Simulate varied data
-      const scenarios: Array<[number, number, ComplianceStatus]> = [
-        [29700, 2700, 'compliant'],   // 8h 15m
-        [30600, 1800, 'missing_break'], // 8h 30m, short break
-        [32400, 2700, 'overtime'],    // 9h
-        [28800, 2700, 'compliant'],   // 8h exact
-        [27000, 2700, 'compliant'],   // 7h 30m
-      ];
-      const [worked, brk, status] = scenarios[(w * 5 + d) % scenarios.length];
-      const ot = Math.max(0, worked - OVERTIME_THRESHOLD);
-
-      totalWorked += worked;
-      totalOvertime += ot;
-
-      const inH = 8 + Math.floor(Math.random() * 1);
-      const inM = Math.floor(Math.random() * 30);
-      const outH = inH + Math.floor(worked / 3600);
-      const outM = inM + Math.floor((worked % 3600) / 60);
-
-      days.push({
-        date: date.toISOString().slice(0, 10),
-        dayLabel: dayNames[d],
-        clockIn: `${inH.toString().padStart(2, '0')}:${inM.toString().padStart(2, '0')} AM`,
-        clockOut: `${(outH % 24).toString().padStart(2, '0')}:${(outM % 60).toString().padStart(2, '0')} PM`,
-        workedSeconds: worked,
-        breakSeconds: brk,
-        overtimeSeconds: ot,
-        status,
-      });
-    }
-
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay() - w * 7);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
-
-    const fmt = (d: Date) =>
-      `${d.getDate()} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}`;
-
-    weeks.push({
-      label: w === 0 ? 'This Week' : w === 1 ? 'Last Week' : `${fmt(weekStart)} – ${fmt(weekEnd)}`,
-      startDate: weekStart.toISOString().slice(0, 10),
-      endDate: weekEnd.toISOString().slice(0, 10),
-      totalWorked,
-      totalOvertime,
-      days,
-    });
-  }
-
-  return weeks;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -172,16 +72,107 @@ function statusConfig(s: ComplianceStatus) {
   }
 }
 
+const EMPTY_FORM: HoursFormValues = {
+  date: new Date().toISOString().slice(0, 10),
+  clockIn: '09:00',
+  clockOut: '17:00',
+  breakMinutes: '30',
+};
+
+function recordToForm(record: DayRecord): HoursFormValues {
+  return {
+    date: record.date,
+    clockIn: toTwentyFourHourTime(record.clockIn),
+    clockOut: toTwentyFourHourTime(record.clockOut),
+    breakMinutes: String(Math.floor(record.breakSeconds / 60)),
+  };
+}
+
+function toTwentyFourHourTime(value: string) {
+  const match = value.match(/^(\d{2}):(\d{2}) (AM|PM)$/);
+  if (!match) return value;
+
+  let hour = Number(match[1]);
+  const minute = match[2];
+  const period = match[3];
+  if (period === 'PM' && hour !== 12) hour += 12;
+  if (period === 'AM' && hour === 12) hour = 0;
+  return `${hour.toString().padStart(2, '0')}:${minute}`;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 export default function HoursScreen() {
-  const weeks = useMemo(() => makeMockWeeks(), []);
+  const records = useHoursStore((state) => state.records);
+  const validateRecord = useHoursStore((state) => state.validateRecord);
+  const createRecord = useHoursStore((state) => state.createRecord);
+  const updateRecord = useHoursStore((state) => state.updateRecord);
+  const deleteRecord = useHoursStore((state) => state.deleteRecord);
+
+  const weeks = useMemo(() => buildWeeks(records), [records]);
   const [selectedWeek, setSelectedWeek] = useState(0);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<DayRecord | null>(null);
+  const [form, setForm] = useState<HoursFormValues>(EMPTY_FORM);
+  const [errors, setErrors] = useState<HoursFormErrors>({});
   const week = weeks[selectedWeek];
 
   const pct = progressPercent(week.totalWorked, WEEK_LIMIT);
   const progressColor = pct >= 100 ? BRAND.red : pct >= 85 ? BRAND.amber : BRAND.green;
+
+  const openCreate = () => {
+    setEditingRecord(null);
+    setForm(EMPTY_FORM);
+    setErrors({});
+    setModalVisible(true);
+  };
+
+  const openEdit = (record: DayRecord) => {
+    setEditingRecord(record);
+    setForm(recordToForm(record));
+    setErrors({});
+    setModalVisible(true);
+  };
+
+  const setField = (field: keyof HoursFormValues) => (value: string) => {
+    const nextForm = { ...form, [field]: value };
+    setForm(nextForm);
+    const result = validateRecord(nextForm, editingRecord?.id);
+    setErrors(result.errors);
+  };
+
+  const handleSubmit = () => {
+    const result = editingRecord
+      ? updateRecord(editingRecord.id, form)
+      : createRecord(form);
+
+    setErrors(result.errors);
+    if (!result.valid) return;
+
+    setModalVisible(false);
+    setEditingRecord(null);
+  };
+
+  const handleDelete = (record: DayRecord) => {
+    Alert.alert(
+      'Delete record',
+      `ลบ record วันที่ ${record.date} หรือไม่?`,
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        {
+          text: 'ลบ',
+          style: 'destructive',
+          onPress: () => {
+            const deleted = deleteRecord(record.id);
+            if (!deleted) {
+              Alert.alert('ลบไม่สำเร็จ', 'ไม่พบ record นี้ใน mock store');
+            }
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -190,10 +181,11 @@ export default function HoursScreen() {
         <Text style={styles.headerTitle}>My Hours</Text>
         <TouchableOpacity
           style={styles.exportBtn}
-          accessibilityLabel="Export hours"
+          onPress={openCreate}
+          accessibilityLabel="Add hours"
         >
-          <Ionicons name="download-outline" size={18} color={BRAND.primary} />
-          <Text style={styles.exportText}>Export</Text>
+          <Ionicons name="add" size={18} color={BRAND.primary} />
+          <Text style={styles.exportText}>Add</Text>
         </TouchableOpacity>
       </View>
 
@@ -259,6 +251,14 @@ export default function HoursScreen() {
         {/* Daily Records */}
         <Text style={styles.sectionTitle}>Daily Breakdown</Text>
         <View style={styles.dayList}>
+          {week.days.length === 0 && (
+            <View style={styles.emptyState}>
+              <Ionicons name="calendar-outline" size={22} color={BRAND.textMuted} />
+              <Text style={styles.emptyTitle}>No records this week</Text>
+              <Text style={styles.emptyText}>เพิ่ม mock record เพื่อทดสอบ CRUD โดยไม่ผ่าน DB</Text>
+            </View>
+          )}
+
           {week.days.map((day) => {
             const sc = statusConfig(day.status);
             const isOff = day.status === 'day_off';
@@ -302,6 +302,23 @@ export default function HoursScreen() {
                     <Text style={styles.otLabel}>+{fmtHoursDecimal(day.overtimeSeconds)} OT</Text>
                   )}
                 </View>
+
+                <View style={styles.rowActions}>
+                  <TouchableOpacity
+                    style={styles.iconButton}
+                    onPress={() => openEdit(day)}
+                    accessibilityLabel={`Edit ${day.date}`}
+                  >
+                    <Ionicons name="create-outline" size={16} color={BRAND.primary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.iconButtonDanger}
+                    onPress={() => handleDelete(day)}
+                    accessibilityLabel={`Delete ${day.date}`}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={BRAND.red} />
+                  </TouchableOpacity>
+                </View>
               </View>
             );
           })}
@@ -322,7 +339,98 @@ export default function HoursScreen() {
           })}
         </View>
       </ScrollView>
+
+      <Modal
+        animationType="slide"
+        transparent
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {editingRecord ? 'Edit Hours' : 'Add Hours'}
+              </Text>
+              <TouchableOpacity onPress={() => setModalVisible(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={BRAND.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <HoursField
+              label="Date"
+              value={form.date}
+              onChangeText={setField('date')}
+              placeholder="YYYY-MM-DD"
+              error={errors.date}
+            />
+            <View style={styles.formGrid}>
+              <HoursField
+                label="Clock In"
+                value={form.clockIn}
+                onChangeText={setField('clockIn')}
+                placeholder="09:00"
+                error={errors.clockIn}
+              />
+              <HoursField
+                label="Clock Out"
+                value={form.clockOut}
+                onChangeText={setField('clockOut')}
+                placeholder="17:00"
+                error={errors.clockOut}
+              />
+            </View>
+            <HoursField
+              label="Break Minutes"
+              value={form.breakMinutes}
+              onChangeText={setField('breakMinutes')}
+              placeholder="30"
+              keyboardType="numeric"
+              error={errors.breakMinutes}
+            />
+
+            <TouchableOpacity style={styles.saveButton} onPress={handleSubmit}>
+              <Ionicons name="checkmark" size={18} color="#fff" />
+              <Text style={styles.saveButtonText}>
+                {editingRecord ? 'Save Changes' : 'Add Record'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
+  );
+}
+
+function HoursField({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  keyboardType,
+  error,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder: string;
+  keyboardType?: 'default' | 'numeric';
+  error?: string;
+}) {
+  return (
+    <View style={styles.fieldWrap}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput
+        style={[styles.fieldInput, error ? styles.fieldInputError : null]}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={BRAND.textMuted}
+        keyboardType={keyboardType ?? 'default'}
+        autoCapitalize="none"
+      />
+      {error ? <Text style={styles.fieldError}>{error}</Text> : null}
+    </View>
   );
 }
 
@@ -419,6 +527,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 14,
   },
+  emptyState: {
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+  },
+  emptyTitle: { color: BRAND.textPrimary, fontSize: 15, fontWeight: '800' },
+  emptyText: { color: BRAND.textMuted, fontSize: 12.5, textAlign: 'center' },
   dayRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -440,11 +556,29 @@ const styles = StyleSheet.create({
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   timeText: { fontSize: 12, color: BRAND.textSecondary, fontVariant: ['tabular-nums'] },
 
-  dayRight: { alignItems: 'flex-end', gap: 4, minWidth: 60 },
+  dayRight: { alignItems: 'flex-end', gap: 4, minWidth: 54 },
   dayHours: { fontSize: 14, fontWeight: '700', color: BRAND.textPrimary, fontVariant: ['tabular-nums'] },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   statusBadgeText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.3 },
   otLabel: { fontSize: 10.5, color: BRAND.orange, fontWeight: '600' },
+  rowActions: { flexDirection: 'row', gap: 6 },
+  iconButton: {
+    alignItems: 'center',
+    borderColor: BRAND.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  iconButtonDanger: {
+    alignItems: 'center',
+    backgroundColor: BRAND.redBg,
+    borderRadius: 8,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
 
   legend: {
     flexDirection: 'row',
@@ -455,4 +589,51 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   legendDot: { width: 7, height: 7, borderRadius: 4 },
   legendText: { fontSize: 11.5, color: BRAND.textMuted },
+
+  modalBackdrop: {
+    backgroundColor: 'rgba(0,0,0,0.32)',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: BRAND.white,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    gap: 12,
+    padding: 18,
+    paddingBottom: 28,
+  },
+  modalHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  modalTitle: { color: BRAND.textPrimary, fontSize: 19, fontWeight: '800' },
+  formGrid: { flexDirection: 'row', gap: 10 },
+  fieldWrap: { flex: 1, gap: 6 },
+  fieldLabel: { color: BRAND.textSecondary, fontSize: 12.5, fontWeight: '700' },
+  fieldInput: {
+    backgroundColor: '#FAFAF9',
+    borderColor: BRAND.border,
+    borderRadius: 10,
+    borderWidth: 1,
+    color: BRAND.textPrimary,
+    fontSize: 15,
+    height: 46,
+    paddingHorizontal: 12,
+  },
+  fieldInputError: { borderColor: BRAND.red },
+  fieldError: { color: BRAND.red, fontSize: 11.5, lineHeight: 16 },
+  saveButton: {
+    alignItems: 'center',
+    backgroundColor: BRAND.primary,
+    borderRadius: 10,
+    flexDirection: 'row',
+    gap: 8,
+    height: 50,
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  saveButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
 });

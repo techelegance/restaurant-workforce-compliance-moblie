@@ -88,29 +88,28 @@ export default function LoginScreen() {
       await new Promise((resolve) => setTimeout(resolve, 1200)); // mock delay
 
       // On success, navigate to the main dashboard
-      // router.replace('/(tabs)/dashboard');
-    } catch (error) {
+      router.replace('/(tabs)');
+    } catch {
       Alert.alert('เข้าสู่ระบบไม่สำเร็จ', 'Email หรือ Password ไม่ถูกต้อง กรุณาลองอีกครั้ง');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDemoLogin = async () => {
+  const handleMockLogin = async () => {
     setLoading(true);
     try {
-      // TODO: Replace with real demo-token endpoint
       await new Promise((resolve) => setTimeout(resolve, 800));
-      // router.replace('/(tabs)/dashboard');
+      router.replace('/(tabs)');
     } catch {
-      Alert.alert('Demo Login ล้มเหลว', 'กรุณาลองอีกครั้ง');
+      Alert.alert('Mock Login ล้มเหลว', 'กรุณาลองอีกครั้ง');
     } finally {
       setLoading(false);
     }
   };
 
   const handleForgotPassword = () => {
-    // router.push('/forgot-password');
+    router.push('/forgot-password');
   };
 
   // ---- Render --------------------------------------------------------------
@@ -122,9 +121,7 @@ export default function LoginScreen() {
           <Ionicons name="shield-checkmark" size={20} color={BRAND.primary} />
           <Text style={styles.brandName}>CompliancePro</Text>
         </View>
-        <TouchableOpacity 
-        // onPress={() => router.push('/support')}
-        >
+        <TouchableOpacity onPress={() => router.push('/support')}>
           <Text style={styles.supportLink}>Support</Text>
         </TouchableOpacity>
       </View>
@@ -249,16 +246,16 @@ export default function LoginScreen() {
               <View style={styles.dividerLine} />
             </View>
 
-            {/* Demo Login */}
+            {/* Mock Login */}
             <TouchableOpacity
               style={[styles.btnDemo, loading && styles.btnDisabled]}
-              onPress={handleDemoLogin}
+              onPress={handleMockLogin}
               disabled={loading}
               accessibilityRole="button"
-              accessibilityLabel="Demo Login"
+              accessibilityLabel="Mock Login"
             >
               <Ionicons name="person-circle-outline" size={18} color={BRAND.primary} />
-              <Text style={styles.btnDemoText}>Demo Login</Text>
+              <Text style={styles.btnDemoText}>Mock Login</Text>
             </TouchableOpacity>
           </View>
 
@@ -267,13 +264,13 @@ export default function LoginScreen() {
             <Text style={styles.footerText}>
               By logging in, you agree to the{' '}
               <Text style={styles.footerLink} 
-              // onPress={() => router.push('/compliance-standards')}
+              onPress={() => router.push('/privacy-policy')}
               >
                 Compliance Standards
               </Text>{' '}
               and{' '}
               <Text style={styles.footerLink}
-              //  onPress={() => router.push('/privacy-policy')}
+              onPress={() => router.push('/privacy-policy')}
                >
                 Privacy Policy
               </Text>

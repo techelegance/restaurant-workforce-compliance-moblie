@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
+import { useMockAttendance } from '@/lib/mock-attendance';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,7 +39,6 @@ const WARNING_THRESHOLD = 3600;      // 60 min — unusually long break
 // Helpers
 // ---------------------------------------------------------------------------
 function formatClock(date: Date): string {
-  const h = date.getHours().toString().padStart(2, '0');
   const m = date.getMinutes().toString().padStart(2, '0');
   const ampm = date.getHours() >= 12 ? 'PM' : 'AM';
   const h12 = (date.getHours() % 12 || 12).toString().padStart(2, '0');
@@ -90,10 +90,10 @@ function getBreakPhase(seconds: number): {
 // ---------------------------------------------------------------------------
 export default function BreakScreen() {
   const router = useRouter();
+  const attendance = useMockAttendance();
 
-  // In real usage pass breakStartTime via params:
-  // const { breakStartTime } = useLocalSearchParams<{ breakStartTime: string }>();
-  const breakStart = new Date(new Date().getTime() - 5 * 60 * 1000); // mock: started 5 min ago
+  const [fallbackBreakStart] = useState(() => new Date(Date.now() - 5 * 60 * 1000));
+  const breakStart = attendance.breakStartTime ?? fallbackBreakStart;
 
   const [elapsed, setElapsed] = useState(
     Math.floor((Date.now() - breakStart.getTime()) / 1000),
@@ -109,6 +109,19 @@ export default function BreakScreen() {
   }, [breakStart]);
 
   const phase = getBreakPhase(elapsed);
+
+  const doEndBreak = useCallback(async () => {
+    setLoading(true);
+    try {
+      await new Promise((r) => setTimeout(r, 700));
+      attendance.endBreak();
+      router.replace('/(tabs)');
+    } catch {
+      Alert.alert('End Break ล้มเหลว', 'กรุณาลองอีกครั้ง');
+    } finally {
+      setLoading(false);
+    }
+  }, [attendance, router]);
 
   const handleEndBreak = useCallback(async () => {
     if (elapsed < REQUIRED_BREAK_SECONDS) {
@@ -127,25 +140,10 @@ export default function BreakScreen() {
     } else {
       doEndBreak();
     }
-  }, [elapsed]);
+  }, [doEndBreak, elapsed]);
 
-  const doEndBreak = async () => {
-    setLoading(true);
-    try {
-      await new Promise((r) => setTimeout(r, 700));
-      router.replace('/');
-    } catch {
-      Alert.alert('End Break ล้มเหลว', 'กรุณาลองอีกครั้ง');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Progress ring values
-  const radius = 90;
-  const circumference = 2 * Math.PI * radius;
+  // Progress ring value
   const progress = Math.min(1, elapsed / REQUIRED_BREAK_SECONDS);
-  const strokeDashoffset = circumference * (1 - progress);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -165,13 +163,7 @@ export default function BreakScreen() {
 
         {/* Progress ring + timer */}
         <View style={styles.ringWrap}>
-          <svg
-            width={220}
-            height={220}
-            viewBox="0 0 220 220"
-            style={{ position: 'absolute' }}
-          />
-          {/* SVG ring via react-native-svg alternative: plain circle overlay */}
+          {/* Mock progress ring without extra native dependencies. */}
           <View style={styles.ringBg} />
           <View
             style={[

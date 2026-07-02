@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -10,16 +10,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { Link, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
+import { useMockAttendance } from "@/lib/mock-attendance";
 
 type ClockStatus = "not_clocked_in" | "clocked_in" | "on_break";
-
-interface ClockState {
-  status: ClockStatus;
-  clockInTime: Date | null;
-  breakStartTime: Date | null;
-  hoursToday: number;
-}
 
 interface LocationInfo {
   verified: boolean;
@@ -90,15 +84,6 @@ function formatDateHeader(date: Date): string {
   ].toUpperCase()} ${date.getDate()}`;
 }
 
-function formatHours(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}h ${m.toString().padStart(2, "0")}m`;
-  if (m > 0) return `${m}m ${s.toString().padStart(2, "0")}s`;
-  return `${s}s`;
-}
-
 function formatHoursDecimal(seconds: number): string {
   return (seconds / 3600).toFixed(2) + "h";
 }
@@ -134,15 +119,10 @@ function getStatusConfig(status: ClockStatus) {
 // ---------------------------------------------------------------------------
 export default function TimeClockScreen() {
   const router = useRouter();
+  const attendance = useMockAttendance();
 
   // ---- State ---------------------------------------------------------------
   const [now, setNow] = useState(new Date());
-  const [clockState, setClockState] = useState<ClockState>({
-    status: "not_clocked_in",
-    clockInTime: null,
-    breakStartTime: null,
-    hoursToday: 0,
-  });
   const [loading, setLoading] = useState<string | null>(null); // action in progress
 
   const location: LocationInfo = {
@@ -159,17 +139,23 @@ export default function TimeClockScreen() {
     return () => clearInterval(id);
   }, []);
 
-  // Hours ticker — counts up while clocked_in (not on break)
-  const hoursRef = useRef(clockState.hoursToday);
-  hoursRef.current = clockState.hoursToday;
-
-  useEffect(() => {
-    if (clockState.status !== "clocked_in") return;
-    const id = setInterval(() => {
-      setClockState((prev) => ({ ...prev, hoursToday: prev.hoursToday + 1 }));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [clockState.status]);
+  const hoursToday = useMemo(() => {
+    if (!attendance.clockInTime) return 0;
+    const activeUntil = attendance.status === "on_break" && attendance.breakStartTime
+      ? attendance.breakStartTime
+      : now;
+    const grossSeconds = Math.max(
+      0,
+      Math.floor((activeUntil.getTime() - attendance.clockInTime.getTime()) / 1000),
+    );
+    return Math.max(0, grossSeconds - attendance.totalBreakSeconds);
+  }, [
+    attendance.breakStartTime,
+    attendance.clockInTime,
+    attendance.status,
+    attendance.totalBreakSeconds,
+    now,
+  ]);
 
   // ---- Actions -------------------------------------------------------------
   const handleClockIn = useCallback(async () => {
@@ -177,57 +163,46 @@ export default function TimeClockScreen() {
     try {
       // TODO: POST /api/attendance/clock-in  { locationId, timestamp }
       await new Promise((r) => setTimeout(r, 700));
-      setClockState((prev) => ({
-        ...prev,
-        status: "clocked_in",
-        clockInTime: new Date(),
-      }));
+      attendance.clockIn();
     } catch {
       Alert.alert("Clock In ล้มเหลว", "กรุณาลองอีกครั้ง");
     } finally {
       setLoading(null);
     }
-  }, []);
+  }, [attendance]);
 
   const handleStartBreak = useCallback(async () => {
     setLoading("startBreak");
     try {
       // TODO: POST /api/attendance/start-break
       await new Promise((r) => setTimeout(r, 500));
-      setClockState((prev) => ({
-        ...prev,
-        status: "on_break",
-        breakStartTime: new Date(),
-      }));
+      attendance.startBreak();
+      router.push("/break");
     } catch {
       Alert.alert("Start Break ล้มเหลว", "กรุณาลองอีกครั้ง");
     } finally {
       setLoading(null);
     }
-  }, []);
+  }, [attendance, router]);
 
   const handleEndBreak = useCallback(async () => {
     setLoading("endBreak");
     try {
       // TODO: POST /api/attendance/end-break
       await new Promise((r) => setTimeout(r, 500));
-      setClockState((prev) => ({
-        ...prev,
-        status: "clocked_in",
-        breakStartTime: null,
-      }));
+      attendance.endBreak();
     } catch {
       Alert.alert("End Break ล้มเหลว", "กรุณาลองอีกครั้ง");
     } finally {
       setLoading(null);
     }
-  }, []);
+  }, [attendance]);
 
   const handleClockOut = useCallback(async () => {
     Alert.alert(
       "Clock Out",
       `ยืนยันการเลิกงาน?\nชั่วโมงทำงานวันนี้: ${formatHoursDecimal(
-        clockState.hoursToday
+        hoursToday
       )}`,
       [
         { text: "ยกเลิก", style: "cancel" },
@@ -239,12 +214,8 @@ export default function TimeClockScreen() {
             try {
               // TODO: POST /api/attendance/clock-out
               await new Promise((r) => setTimeout(r, 700));
-              setClockState({
-                status: "not_clocked_in",
-                clockInTime: null,
-                breakStartTime: null,
-                hoursToday: 0,
-              });
+              attendance.clockOut();
+              router.push("/shiftSummary");
             } catch {
               Alert.alert("Clock Out ล้มเหลว", "กรุณาลองอีกครั้ง");
             } finally {
@@ -254,10 +225,10 @@ export default function TimeClockScreen() {
         },
       ]
     );
-  }, [clockState.hoursToday]);
+  }, [attendance, hoursToday, router]);
 
   // ---- Derived -------------------------------------------------------------
-  const { status } = clockState;
+  const { status } = attendance;
   const statusConfig = getStatusConfig(status);
   const isLoading = loading !== null;
 
@@ -272,7 +243,7 @@ export default function TimeClockScreen() {
           <Text style={styles.brandName}>CompliancePro</Text>
         </View>
         <TouchableOpacity
-          // onPress={() => router.push('/notifications')}
+          onPress={() => router.push('/notifications')}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           accessibilityLabel="Notifications"
         >
@@ -308,9 +279,9 @@ export default function TimeClockScreen() {
           </View>
 
           {/* Clock In time shown when working */}
-          {clockState.clockInTime && (
+          {attendance.clockInTime && (
             <Text style={styles.clockedSince}>
-              เข้างานตั้งแต่ {formatTime(clockState.clockInTime)}
+              เข้างานตั้งแต่ {formatTime(attendance.clockInTime)}
             </Text>
           )}
         </View>
@@ -329,12 +300,12 @@ export default function TimeClockScreen() {
               color={BRAND.primary}
             />
             <Text style={styles.hoursPillText}>
-              Hours Today: {formatHoursDecimal(clockState.hoursToday)}
+              Hours Today: {formatHoursDecimal(hoursToday)}
             </Text>
           </View>
 
           {/* Overtime warning */}
-          {clockState.hoursToday >= 28800 /* 8h */ && (
+          {hoursToday >= 28800 /* 8h */ && (
             <View style={styles.warningBadge}>
               <Ionicons name="warning-outline" size={14} color={BRAND.amber} />
               <Text style={styles.warningText}>เข้าสู่ช่วง Overtime</Text>
@@ -373,7 +344,7 @@ export default function TimeClockScreen() {
                       status === "on_break" && styles.btnBreakDisabledStyle,
                       isLoading && styles.btnDisabled,
                     ]}
-                    onPress={() => router.replace("/break")}
+                    onPress={handleStartBreak}
                     disabled={isLoading || status === "on_break"}
                     accessibilityRole="button"
                     accessibilityLabel="Start Break"
@@ -452,14 +423,14 @@ export default function TimeClockScreen() {
                   {loading === "clockOut" ? (
                     <ActivityIndicator color={BRAND.primary} />
                   ) : (
-                    <Link href="/shiftSummary">
+                    <>
                       <Ionicons
                         name="log-out-outline"
                         size={20}
                         color={BRAND.primary}
                       />
                       <Text style={styles.btnClockOutText}>Clock Out</Text>
-                    </Link>
+                    </>
                   )}
                 </TouchableOpacity>
               </>
@@ -480,9 +451,9 @@ export default function TimeClockScreen() {
               <Text style={styles.locationName}>
                 Verified at {location.name}
               </Text>
-              {clockState.breakStartTime && (
+              {attendance.breakStartTime && (
                 <Text style={styles.breakSince}>
-                  พักตั้งแต่ {formatTime(clockState.breakStartTime)}
+                  พักตั้งแต่ {formatTime(attendance.breakStartTime)}
                 </Text>
               )}
             </View>
